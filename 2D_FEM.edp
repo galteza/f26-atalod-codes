@@ -1,0 +1,69 @@
+//Write down your own explanation:
+
+load "msh3"
+//load "medit"
+
+real E0 = 7e10; // Young's Modulus
+//real Emin = 0.001;
+real nu = 0.33; //poisson's ratio
+real f1 = 0.0;  //t1
+real f2 = -1e6; //t2
+real f3 = 0.0;  //t3
+real sqrt2=sqrt(2);
+
+
+ // 2D mesh Create
+real L = 2.0, H = 1.0;
+real x0 = 0 , x1 = L ;
+real y0 = 0.0 , y1 = H*0.5*(1.0-1.0/3.0) , y2 = H*0.5*(1.0+1.0/3.0) , y3 = H ;
+int[int] l1=[2,2,0,1] ;//down, right, upper, left
+int[int] l2=[0,3,0,1] ;//down, right, upper, left
+int[int] l3=[0,2,2,1] ;//down, right, upper, left
+int xmeshnum=60;  //[60,120,180,240]
+int ymeshnum=10;  //[10,20,30,40]
+mesh Th1=square(xmeshnum,ymeshnum,[x0+(x1-x0)*x,y0+(y1-y0)*y],label=l1,flags=1); // bottom
+mesh Th2=square(xmeshnum,ymeshnum,[x0+(x1-x0)*x,y1+(y2-y1)*y],label=l2,flags=1); // middle: traction
+mesh Th3=square(xmeshnum,ymeshnum,[x0+(x1-x0)*x,y2+(y3-y2)*y],label=l3,flags=1); // upper
+mesh Thh = Th1+Th2+Th3;
+plot(Thh,WindowIndex=0);
+
+
+mesh Th=Thh;
+//mesh3 Th0=Th; to enable 3D
+
+// Define the Finite element space
+fespace Vh(Th,[P1,P1]);
+Vh [u1,u2], [v1,v2];
+
+
+//Define macro
+// epsilonij
+macro epsilon(u1,u2)  [dx(u1),dy(u2),(dy(u1)+dx(u2))/sqrt2] //
+//epsilonkk
+macro div(u1,u2) ( dx(u1)+dy(u2) ) //
+
+
+// Lame constants
+func lambda = E0*nu*(1.0/((1.0+nu)*(1.0-1.0*nu)));	// Lame constant for plane stress
+func mu = E0*(1.0/(2.0*(1.0+nu)));               // Lame constant
+
+
+// Define weak form
+solve elasticity([u1,u2],[v1,v2])=
+  int2d(Th)(
+	    lambda*div(u1,u2)*div(v1,v2)
+	    +2.*mu*( epsilon(u1,u2)'*epsilon(v1,v2) ) //')
+	      )
+  - int1d(Th,3)(f1*v1+f2*v2)
+  + on(1,u1=0,u2=0)
+  ;
+elasticity;
+
+  real dmax=  u2[].linfty;
+   real coef= 0.5/dmax;
+  int[int] ref2=[1,0,2,0];
+  mesh Thm=movemesh(Th,[x+u1*coef,y+u2*coef]);
+real objective = int1d(Th,3)(f1*u1+f2*u2);
+string caption="Compliance = "+ objective;
+  plot(Th,u2, WindowIndex=1, boundary=0, fill=1, value=true, nbiso=20,wait=0);
+  plot(Thm,WindowIndex=0, boundary=0, fill=1, value=true, wait=0, cmm=caption);

@@ -1,0 +1,129 @@
+load "msh3"
+load "iovtk"   // enables savevtk()
+
+// --------------------
+// Material + loads
+// --------------------
+real E0 = 7e10;     // Young's Modulus
+real nu = 0.33;     // Poisson's ratio
+real f1 = 0.0;
+real f2 = -1e6;
+real f3 = 0.0;
+
+// --------------------
+// 2D mesh (stacked 3 blocks) then extrude to 3D
+// --------------------
+real L = 2.0, H = 1.0;
+real x0 = 0 , x1 = L ;
+real y0 = 0.0 , y1 = H*0.5*(1.0-1.0/3.0) , y2 = H*0.5*(1.0+1.0/3.0) , y3 = H ;
+
+int[int] l1=[2,2,0,1] ; // down, right, upper, left
+int[int] l2=[0,3,0,1] ; // down, right, upper, left   (traction label=3 on "right")
+int[int] l3=[0,2,2,1] ; // down, right, upper, left
+
+int xmeshnum=60;
+int ymeshnum=10;
+
+mesh Th1 = square(xmeshnum,ymeshnum,[x0+(x1-x0)*x,y0+(y1-y0)*y],label=l1,flags=1); // bottom
+mesh Th2 = square(xmeshnum,ymeshnum,[x0+(x1-x0)*x,y1+(y2-y1)*y],label=l2,flags=1); // middle (traction)
+mesh Th3 = square(xmeshnum,ymeshnum,[x0+(x1-x0)*x,y2+(y3-y2)*y],label=l3,flags=1); // upper
+mesh Thh = Th1 + Th2 + Th3;
+
+// Extrude to 3D
+real zmin = 0;
+real zmax = 0.2;
+int  znn  = 5;
+
+mesh3 Th = buildlayers(Thh, znn, coef=max((zmax-zmin)/zmax, 1./znn), zbound=[zmin,zmax]);
+
+// --------------------
+// FE space
+// --------------------
+fespace Vh(Th,[P1,P1,P1]);
+Vh [u1,u2,u3],[v1,v2,v3];
+
+// --------------------
+// Strain / stress macros (3D linear elasticity)
+// --------------------
+macro e1(u1,u2,u3) ( dx(u1) )           // E11
+macro e2(u1,u2,u3) ( dy(u2) )           // E22
+macro e3(u1,u2,u3) ( dz(u3) )           // E33
+macro e4(u1,u2,u3) ( dx(u2)+dy(u1) )    // 2*E12
+macro e5(u1,u2,u3) ( dz(u1)+dx(u3) )    // 2*E13
+macro e6(u1,u2,u3) ( dy(u3)+dz(u2) )    // 2*E23
+
+func lambda = E0*nu/((1.0+nu)*(1.0-2.0*nu));
+func mu     = E0/(2.0*(1.0+nu));
+
+func D11 = lambda + 2*mu;
+func D12 = lambda;
+func D13 = lambda;
+func D21 = D12;
+func D22 = lambda + 2*mu;
+func D23 = lambda;
+func D31 = lambda;
+func D32 = D23;
+func D33 = lambda + 2*mu;
+func D44 = mu;
+func D55 = mu;
+func D66 = mu;
+
+macro s1(u1,u2,u3) ( D11*e1(u1,u2,u3) + D12*e2(u1,u2,u3) + D13*e3(u1,u2,u3) ) // S11
+macro s2(u1,u2,u3) ( D21*e1(u1,u2,u3) + D22*e2(u1,u2,u3) + D23*e3(u1,u2,u3) ) // S22
+macro s3(u1,u2,u3) ( D31*e1(u1,u2,u3) + D32*e2(u1,u2,u3) + D33*e3(u1,u2,u3) ) // S33
+macro s4(u1,u2,u3) ( D44*e4(u1,u2,u3) )                                        // S12
+macro s5(u1,u2,u3) ( D55*e5(u1,u2,u3) )                                        // S13
+macro s6(u1,u2,u3) ( D66*e6(u1,u2,u3) )                                        // S23
+
+// --------------------
+// Solve
+// --------------------
+solve elasticity([u1,u2,u3],[v1,v2,v3]) =
+  int3d(Th)(
+      s1(u1,u2,u3)*e1(v1,v2,v3)
+    + s2(u1,u2,u3)*e2(v1,v2,v3)
+    + s3(u1,u2,u3)*e3(v1,v2,v3)
+    + s4(u1,u2,u3)*e4(v1,v2,v3)
+    + s5(u1,u2,u3)*e5(v1,v2,v3)
+    + s6(u1,u2,u3)*e6(v1,v2,v3)
+  )
+  - int2d(Th,3)( f1*v1 + f2*v2 + f3*v3 )
+  + on(1, u1=0, u2=0, u3=0)
+;
+
+// --------------------
+// Build deformed mesh for visualization
+// --------------------
+real dmax    = u2[].linfty;
+real coefDef = 0.5/(dmax + 1e-30);   // safe
+
+int[int] ref2=[1,0,2,0];
+mesh3 Thm = movemesh3(Th, transfo=[x+coefDef*u1, y+coefDef*u2, z+coefDef*u3], label=ref2);
+Thm = change(Thm, label=ref2);
+
+// Interpolate solution onto Thm (so field is defined on deformed mesh)
+fespace Vhm(Thm,[P1,P1,P1]);
+Vhm [u1m,u2m,u3m] = [u1,u2,u3];
+
+// --------------------
+// Plots (initial + deformed + overlay)
+// --------------------
+plot(Th , u2 ,  WindowIndex=0, boundary=0, fill=1, value=true, nbiso=20, wait=0); // initial mesh + u2
+plot(Thm, u2m,  WindowIndex=1, boundary=0, fill=1, value=true, nbiso=20, wait=0); // deformed mesh + u2
+plot(Th, Thm,   WindowIndex=2, boundary=0, wait=0);                                // overlay geometry
+
+// --------------------
+// VTK output
+//   - "initial" uses Th  (original geometry)
+//   - "deformed" uses Thm (deformed geometry)
+// --------------------
+
+// If you want ONE vector field U, use order as an array of length 3:
+int[int] Uorder = [1,1,1];
+savevtk("elasticity_U_initial.vtu",  Th,  [u1,u2,u3],   dataname="U", order=Uorder);
+savevtk("elasticity_U_deformed.vtu", Thm, [u1m,u2m,u3m],dataname="U", order=Uorder);
+
+// (Optional) Also export scalar u2 (sometimes convenient in ParaView)
+int[int] Sorder = [1];
+savevtk("elasticity_u2_initial.vtu",  Th,  u2,  dataname="u2", order=Sorder);
+savevtk("elasticity_u2_deformed.vtu", Thm, u2m, dataname="u2", order=Sorder);

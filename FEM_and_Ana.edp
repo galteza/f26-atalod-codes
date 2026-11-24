@@ -1,0 +1,93 @@
+// ---------------------- PARAMETERS ----------------------
+// Physical and geometric properties
+real L = 48;              // Length of the beam
+real D = 12;              // Depth (height) of the beam
+real I = D^3 / 12;        // Moment of inertia for rectangular cross-section (I = b*h^3/12, with b = 1)
+real E = 3.0e7;           // Young's modulus (material stiffness)
+real nu = 0.3;            // Poisson's ratio
+real P = -1000;           // Applied load (negative for downward force)
+
+// ---------------------- LAME PARAMETERS ----------------------
+// Plane stress assumption: compute Lamé constants
+real mu = E / (2 * (1 + nu));               // Shear modulus
+real lambda = E * nu / (1 - nu^2);          // First Lamé parameter
+
+// ---------------------- BOUNDARY DEFINITION ----------------------
+// Beam outline defined counter-clockwise using parametric border functions
+border C1(t = +12/2, -12/2){ x = 0;     y = t;     label = 1; }  // Left vertical edge
+border C2(t = 0, 48)       { x = t;     y = -12/2; label = 2; }  // Bottom horizontal edge
+border C3(t = -12/2, +12/2){ x = 48;    y = t;     label = 3; }  // Right vertical edge
+border C4(t = 48, 0)       { x = t;     y = +12/2; label = 4; }  // Top horizontal edge
+
+// ---------------------- MESH GENERATION ----------------------
+mesh th = buildmesh(C1(10) + C2(40) + C3(10) + C4(40)); // Discretize boundaries and generate 2D mesh
+
+// ---------------------- FINITE ELEMENT SPACE ----------------------
+fespace Vh(th, [P1, P1]);           // Define vector-valued FE space using linear (P1) elements
+Vh [u1, u2], [v1, v2];              // u1/u2 are displacement fields; v1/v2 are test functions
+
+// ---------------------- TRACTION BOUNDARY CONDITION ----------------------
+func t2 = -P / D; // Uniform traction per unit thickness on left edge (C1) due to total load P
+
+// ---------------------- ANALYTICAL SOLUTION ----------------------
+fespace Vh2(th, P1);
+Vh2 u2ana = P/(6*E*I) * (3*nu*x*y^2 + x^3 - 3*L^2*x + 2*L^3);  // Analytical vertical deflection for comparison
+
+// ---------------------- VARIATIONAL FORMULATION ----------------------
+solve elasticity(u1, u2, v1, v2) =
+    int2d(th)(
+        mu * (2*dx(u1)*dx(v1) + 2*dy(u2)*dy(v2) + dy(u1)*dx(v2) + dx(u2)*dy(v1)
+              + dy(u1)*dy(v1) + dx(u2)*dx(v2)) +
+        lambda * (dx(u1) + dy(u2)) * (dx(v1) + dy(v2))
+    )
+    - int1d(th, C1)(-t2 * v2)      // Apply vertical traction to left boundary (downward force)
+    + on(C3, u1 = 0, u2 = 0);      // Clamped boundary condition at the right edge
+
+// ---------------------- VISUALIZATION OF NUMERICAL SOLUTION ----------------------
+real[int] viso(31);               // Color contour levels
+for (int i = 0; i < viso.n; i++)
+    viso[i] = -0.009 + i * 0.0004;
+
+string caption = " Numerical ";
+plot(u2, WindowIndex = 0, viso = viso(0:viso.n-1), cmm = caption,
+     value = 1, fill = 1, wait = 0, ps = "u2_numerical.eps");
+
+// ---------------------- VISUALIZATION OF ANALYTICAL SOLUTION ----------------------
+real[int] vviso(31);
+for (int i = 0; i < vviso.n; i++)
+    vviso[i] = -0.009 + i * 0.0004;
+
+caption = " Analytical ";
+plot(u2ana, WindowIndex = 1, viso = vviso(0:vviso.n-1), cmm = caption,
+     value = 1, fill = 1, wait = 0, ps = "u2_analytical.eps");
+
+// ---------------------- DEFORMED MESH PLOT ----------------------
+real coef = 200;  // Amplification factor for visualization
+th = movemesh(th, [x + u1*coef, y + u2*coef]);
+plot(th, WindowIndex = 2);
+
+
+
+real[int] xx(49), u2arr(49), u2anaarr(49);
+
+// ----- DATA COLLECTION -----
+for (int i = 0; i < 49; i++) {
+    x = i;
+    y = 0;
+
+    xx[i]        = x;
+    u2arr[i]    = u2;       // Numerical solution at y = 0
+    u2anaarr[i] = u2ana;    // Analytical solution at y = 0
+
+    cout << setw(5) << xx[i]
+         << setw(18) << u2anaarr[i]
+         << setw(18) << u2arr[i] << endl;
+}
+
+// -------- PLOT COMPARISON: Numerical vs Analytical --------
+plot(
+    [xx, u2arr],       // Numerical result
+    [xx, u2anaarr],    // Analytical result
+    cmm = "Comparison of u2 (numerical, blue) and u2ana (analytical, red)",
+    wait = true
+);
